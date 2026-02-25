@@ -1,78 +1,75 @@
 import requests
 import pandas as pd
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+import ta
+import time
 
-TOKEN = "8742635438:AAHdSn7_N6UpQtQ-7W2PVHOh9h8Z5nZImtg"
+symbol = "bitcoin"
 
-# گرفتن داده بیت کوین
-def get_data():
-    url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"
-    data = requests.get(url).json()
-    prices = [x[1] for x in data["prices"]]
-    df = pd.DataFrame(prices, columns=["price"])
+def get_price():
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol}&vs_currencies=usd"
+    return requests.get(url).json()[symbol]["usd"]
+
+def get_candles():
+    url = "https://api.binance.com/api/v3/klines"
+    params = {
+        "symbol": "BTCUSDT",
+        "interval": "15m",
+        "limit": 100
+    }
+    data = requests.get(url, params=params).json()
+
+    df = pd.DataFrame(data, columns=[
+        "time","open","high","low","close","volume",
+        "close_time","qav","trades","tbbav","tbqav","ignore"
+    ])
+
+    df["close"] = df["close"].astype(float)
+    df["volume"] = df["volume"].astype(float)
+
     return df
 
-# محاسبه RSI
-def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = -delta.clip(upper=0).rolling(period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+def analyze():
+    df = get_candles()
 
-# محاسبه MACD
-def calculate_macd(series):
-    ema12 = series.ewm(span=12, adjust=False).mean()
-    ema26 = series.ewm(span=26, adjust=False).mean()
-    macd = ema12 - ema26
-    signal = macd.ewm(span=9, adjust=False).mean()
-    return macd, signal
+    close = df["close"]
+    volume = df["volume"]
 
-# /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("ربات تحلیلگر فعال است ✅\nبرای تحلیل بنویس /analyze")
+    # RSI
+    rsi = ta.momentum.RSIIndicator(close, window=14).rsi().iloc[-1]
 
-# /analyze
-async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    df = get_data()
+    # MA
+    ma20 = ta.trend.SMAIndicator(close, window=20).sma_indicator().iloc[-1]
 
-    rsi = calculate_rsi(df["price"])
-    ma = df["price"].rolling(20).mean()
-    macd, macd_signal = calculate_macd(df["price"])
+    # MACD
+    macd = ta.trend.MACD(close)
+    macd_value = macd.macd().iloc[-1]
+    signal = macd.macd_signal().iloc[-1]
 
-    price = df["price"].iloc[-1]
-    rsi_value = rsi.iloc[-1]
-    ma_value = ma.iloc[-1]
-    macd_value = macd.iloc[-1]
-    macd_signal_value = macd_signal.iloc[-1]
+    price = get_price()
 
-    signal_text = "Neutral"
+    # Volume Spike
+    avg_volume = volume.mean()
+    volume_signal = volume.iloc[-1] > avg_volume * 1.3
 
-    if rsi_value < 30 and macd_value > macd_signal_value:
-        signal_text = "Buy 📈"
-    elif rsi_value > 70 and macd_value < macd_signal_value:
-        signal_text = "Sell 📉"
+    # Pump / Dump Detection
+    pump = rsi > 70 and price > ma20 and macd_value > signal and volume_signal
+    dump = rsi < 30 and price < ma20 and macd_value < signal and volume_signal
 
-    message = (
-        f"📊 Bitcoin Analysis\n\n"
-        f"Price: {price}\n"
-        f"RSI: {rsi_value}\n"
-        f"MA20: {ma_value}\n"
-        f"MACD: {macd_value}\n"
-        f"Signal Line: {macd_signal_value}\n\n"
-        f"Final Signal: {signal_text}"
-    )
+    print("\n📊 BTC 15m Analysis")
+    print(f"Price: {price}")
+    print(f"RSI: {rsi}")
+    print(f"MA20: {ma20}")
+    print(f"MACD: {macd_value}")
+    print(f"Signal Line: {signal}")
 
-    await update.message.reply_text(message)
-
-def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("analyze", analyze))
-    print("Bot is running...")
-    app.run_polling()
+    if pump:
+        print("🚀 Pump احتمال زیاد (Buy Signal)")
+    elif dump:
+        print("📉 Dump احتمال زیاد (Sell Signal)")
+    else:
+        print("⚖ Market Neutral")
 
 if __name__ == "__main__":
-    main()
+    while True:
+        analyze()
+        time.sleep(300)
