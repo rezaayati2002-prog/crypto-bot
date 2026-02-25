@@ -1,3 +1,5 @@
+print("Bot started")
+print("TOKEN:", TOKEN)
 import requests
 import pandas as pd
 import ta
