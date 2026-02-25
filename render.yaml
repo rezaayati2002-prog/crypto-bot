@@ -1,0 +1,6 @@
+services:
+  - type: worker
+    name: crypto-bot
+    runtime: python
+    buildCommand: ""
+    startCommand: python bot.py
